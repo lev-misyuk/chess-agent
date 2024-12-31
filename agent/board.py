@@ -318,122 +318,137 @@ class Board:
 
         return attacks
 
-    def is_square_attacked(self, square: Square, by_white: str):
+    def is_square_attacked(self, square: Square, by_white: bool) -> bool:
         """Checks if a square is attacked by any piece of the given color"""
-        for i in range(64):
-            piece = self.get_piece_at(i)
-            if piece == '.':
-                continue
+        square_idx = int(square)
 
-            is_white_piece = piece.isupper()
-            if is_white_piece != by_white:
-                continue
+        # Check pawn attacks
+        rank, file = square_idx // 8, square_idx % 8
+        if by_white:
+            # Check white pawn attacks
+            for attack_file in [file - 1, file + 1]:
+                if 0 <= attack_file < 8 and rank > 0:
+                    attack_square = Square.from_coords(rank - 1, attack_file)
+                    if self.get_piece_at(attack_square) == 'P':
+                        return True
+        else:
+            # Check black pawn attacks
+            for attack_file in [file - 1, file + 1]:
+                if 0 <= attack_file < 8 and rank < 7:
+                    attack_square = Square.from_coords(rank + 1, attack_file)
+                    if self.get_piece_at(attack_square) == 'p':
+                        return True
 
-            if self.get_attacks(i) & (1 << int(square)):
-                return True
+        # Check knight attacks
+        knight_moves = [
+            (2, 1), (2, -1), (-2, 1), (-2, -1),
+            (1, 2), (1, -2), (-1, 2), (-1, -2)
+        ]
+        for rank_offset, file_offset in knight_moves:
+            new_rank = rank + rank_offset
+            new_file = file + file_offset
+            if 0 <= new_rank < 8 and 0 <= new_file < 8:
+                attack_square = Square.from_coords(new_rank, new_file)
+                piece = self.get_piece_at(attack_square)
+                if piece == ('N' if by_white else 'n'):
+                    return True
+
+        # Check sliding piece attacks (bishop, rook, queen)
+        # Diagonal directions for bishop/queen
+        diagonal_directions = [
+            self.NORTH_EAST, self.NORTH_WEST,
+            self.SOUTH_EAST, self.SOUTH_WEST
+        ]
+
+        # Straight directions for rook/queen
+        straight_directions = [
+            self.NORTH, self.SOUTH,
+            self.EAST, self.WEST
+        ]
+
+        # Check diagonal attacks
+        for direction in diagonal_directions:
+            current_square = square_idx
+            current_rank, current_file = rank, file
+
+            while True:
+                current_square += direction
+                new_rank = current_square // 8
+                new_file = current_square % 8
+
+                if (current_square < 0 or current_square > 63 or
+                    abs(new_rank - current_rank) != abs(new_file - current_file)):
+                    break
+
+                piece = self.get_piece_at(Square.from_bitboard_square(current_square))
+                if piece != '.':
+                    if by_white:
+                        if piece in 'BQ':  # White bishop or queen
+                            return True
+                    else:
+                        if piece in 'bq':  # Black bishop or queen
+                            return True
+                    break
+
+                current_rank, current_file = new_rank, new_file
+
+        # Check straight attacks
+        for direction in straight_directions:
+            current_square = square_idx
+            current_rank, current_file = rank, file
+
+            while True:
+                current_square += direction
+                new_rank = current_square // 8
+                new_file = current_square % 8
+
+                if (current_square < 0 or current_square > 63 or
+                    (direction in [self.EAST, self.WEST] and new_rank != current_rank) or
+                    (direction in [self.NORTH, self.SOUTH] and new_file != current_file)):
+                    break
+
+                piece = self.get_piece_at(Square.from_bitboard_square(current_square))
+                if piece != '.':
+                    if by_white:
+                        if piece in 'RQ':  # White rook or queen
+                            return True
+                    else:
+                        if piece in 'rq':  # Black rook or queen
+                            return True
+                    break
+
+                current_rank, current_file = new_rank, new_file
+
+        # Check king attacks
+        king_moves = [(1, 0), (1, 1), (0, 1), (-1, 1),
+                    (-1, 0), (-1, -1), (0, -1), (1, -1)]
+        for rank_offset, file_offset in king_moves:
+            new_rank = rank + rank_offset
+            new_file = file + file_offset
+            if 0 <= new_rank < 8 and 0 <= new_file < 8:
+                attack_square = Square.from_coords(new_rank, new_file)
+                piece = self.get_piece_at(attack_square)
+                if piece == ('K' if by_white else 'k'):
+                    return True
 
         return False
 
-    def is_in_check(self, white: str):
+    def is_in_check(self, white: bool) -> bool:
         """Determines if the given side is in check"""
-        king_square = None
+        # Find king position
         king_bb = self.white_king if white else self.black_king
+        king_square = None
 
-        # Find king's square
         for i in range(64):
             if king_bb & (1 << i):
-                king_square = i
+                king_square = Square.from_bitboard_square(i)
                 break
 
+        if king_square is None:
+            return False
+
+        # Check if any enemy piece attacks the king
         return self.is_square_attacked(king_square, not white)
-
-    def generate_pseudo_legal_moves(self) -> list[Move]:
-        """Generates all pseudo-legal moves in the current position"""
-        moves = []
-        side_pieces = self.white_pieces if self.white_to_move else self.black_pieces
-
-        for bb_square in range(64):
-            if not (side_pieces & (1 << bb_square)):
-                continue
-
-            from_square = Square.from_bitboard_square(bb_square)
-            piece = self.get_piece_at(from_square)
-
-            # Get attacked squares
-            attacks = self.get_attacks(from_square)
-
-            # Filter out attacks on own pieces
-            if self.white_to_move:
-                attacks &= ~self.white_pieces
-            else:
-                attacks &= ~self.black_pieces
-
-            # Generate moves from attacks
-            for to_bb_square in range(64):
-                if attacks & (1 << to_bb_square):
-                    to_square = Square.from_bitboard_square(to_bb_square)
-                    target_piece = self.get_piece_at(to_square)
-
-                    # Determine move flag
-                    flag = MoveFlag.QUIET
-                    if target_piece != '.':
-                        flag = MoveFlag.CAPTURE
-
-                    # Handle pawn moves
-                    if piece.upper() == 'P':
-                        # Promotions
-                        if (self.white_to_move and to_square.rank == 8) or \
-                           (not self.white_to_move and to_square.rank == 1):
-                            promotion_flags = (
-                                MoveFlag.PROMOTION_Q,
-                                MoveFlag.PROMOTION_R,
-                                MoveFlag.PROMOTION_B,
-                                MoveFlag.PROMOTION_N
-                            ) if flag == MoveFlag.QUIET else (
-                                MoveFlag.PROMOTION_CAPTURE_Q,
-                                MoveFlag.PROMOTION_CAPTURE_R,
-                                MoveFlag.PROMOTION_CAPTURE_B,
-                                MoveFlag.PROMOTION_CAPTURE_N
-                            )
-                            for promotion_flag in promotion_flags:
-                                moves.append(Move(from_square, to_square, promotion_flag))
-                            continue
-
-                        # En passant
-                        if self.en_passant_target == to_square:
-                            flag = MoveFlag.EN_PASSANT
-
-                    # Handle castling
-                    elif piece.upper() == 'K':
-                        if self.white_to_move:
-                            if (from_square == Square.E1 and to_square == Square.G1 and
-                                self.castling_rights['K']):
-                                flag = MoveFlag.KING_CASTLE
-                            elif (from_square == Square.E1 and to_square == Square.C1 and
-                                  self.castling_rights['Q']):
-                                flag = MoveFlag.QUEEN_CASTLE
-                        else:
-                            if (from_square == Square.E8 and to_square == Square.G8 and
-                                self.castling_rights['k']):
-                                flag = MoveFlag.KING_CASTLE
-                            elif (from_square == Square.E8 and to_square == Square.C8 and
-                                  self.castling_rights['q']):
-                                flag = MoveFlag.QUEEN_CASTLE
-
-                    moves.append(Move(from_square, to_square, flag))
-
-            # Add pawn double pushes
-            if piece.upper() == 'P':
-                if (self.white_to_move and from_square.rank == 2) or \
-                   (not self.white_to_move and from_square.rank == 7):
-                    double_push_square = Square.from_coords(
-                        from_square.rank + (2 if self.white_to_move else -2),
-                        from_square.file
-                    )
-                    if self.get_piece_at(double_push_square) == '.':
-                        moves.append(Move(from_square, double_push_square, MoveFlag.DOUBLE_PAWN_PUSH))
-
-        return moves
 
     def make_move(self, move: Move) -> bool:
         """Makes a move on the board if it's legal"""
@@ -495,9 +510,17 @@ class Board:
             else:
                 self.black_pawns &= ~to_mask
 
-            # Add promoted piece
+            # Add promoted piece based on the promotion type
             promotion_piece = move.get_promotion_piece()
-            target_bb = f"{'white' if self.white_to_move else 'black'}_{promotion_piece.lower()}s"
+            if promotion_piece == 'Q':
+                target_bb = 'white_queens' if self.white_to_move else 'black_queens'
+            elif promotion_piece == 'R':
+                target_bb = 'white_rooks' if self.white_to_move else 'black_rooks'
+            elif promotion_piece == 'B':
+                target_bb = 'white_bishops' if self.white_to_move else 'black_bishops'
+            elif promotion_piece == 'N':
+                target_bb = 'white_knights' if self.white_to_move else 'black_knights'
+
             current_bb = getattr(self, target_bb)
             setattr(self, target_bb, current_bb | to_mask)
 
@@ -534,32 +557,293 @@ class Board:
 
         return True
 
-    def is_checkmate(self):
+    def is_checkmate(self) -> bool:
         """Determines if the current position is checkmate"""
+        # If not in check, it's not checkmate
         if not self.is_in_check(self.white_to_move):
             return False
 
-        # Try all possible moves
-        for move in self.generate_pseudo_legal_moves():
-            old_state = self.__dict__.copy()
-            if self.make_move(*move):
-                self.__dict__ = old_state
-                return False
-            self.__dict__ = old_state
+        # If there are any legal moves, it's not checkmate
+        return len(self.get_legal_moves()) == 0
 
-        return True
-
-    def is_stalemate(self):
+    def is_stalemate(self) -> bool:
         """Determines if the current position is stalemate"""
+        # If in check, it's not stalemate
         if self.is_in_check(self.white_to_move):
             return False
 
-        # Try all possible moves
-        for move in self.generate_pseudo_legal_moves():
+        # If there are any legal moves, it's not stalemate
+        return len(self.get_legal_moves()) == 0
+
+    def get_legal_pawn_moves(self, square: Square) -> list[Move]:
+        """Get all legal pawn moves from given square"""
+        moves = []
+        square_idx = int(square)
+        rank, file = square_idx // 8, square_idx % 8
+
+        if self.white_to_move:
+            # Forward moves
+            if rank < 7:  # Not on last rank
+                # Single push
+                target = Square.from_coords(rank + 1, file)
+                if self.get_piece_at(target) == '.':
+                    if rank == 6:  # Promotion
+                        for flag in [MoveFlag.PROMOTION_Q, MoveFlag.PROMOTION_R, 
+                                MoveFlag.PROMOTION_B, MoveFlag.PROMOTION_N]:
+                            moves.append(Move(square, target, flag))
+                    else:
+                        moves.append(Move(square, target, MoveFlag.QUIET))
+
+                    # Double push from starting rank
+                    if rank == 1:
+                        target = Square.from_coords(rank + 2, file)
+                        if self.get_piece_at(target) == '.':
+                            moves.append(Move(square, target, MoveFlag.DOUBLE_PAWN_PUSH))
+
+            # Captures
+            for capture_file in [file - 1, file + 1]:
+                if 0 <= capture_file < 8 and rank < 7:
+                    target = Square.from_coords(rank + 1, capture_file)
+                    piece_at_target = self.get_piece_at(target)
+
+                    if piece_at_target != '.' and piece_at_target.islower():  # Enemy piece
+                        if rank == 6:  # Promotion capture
+                            for flag in [MoveFlag.PROMOTION_CAPTURE_Q, MoveFlag.PROMOTION_CAPTURE_R,
+                                    MoveFlag.PROMOTION_CAPTURE_B, MoveFlag.PROMOTION_CAPTURE_N]:
+                                moves.append(Move(square, target, flag))
+                        else:
+                            moves.append(Move(square, target, MoveFlag.CAPTURE))
+
+                    # En passant
+                    if self.en_passant_target and target == self.en_passant_target:
+                        moves.append(Move(square, target, MoveFlag.EN_PASSANT))
+
+        else:  # Black pawns
+            # Forward moves
+            if rank > 0:  # Not on last rank
+                # Single push
+                target = Square.from_coords(rank - 1, file)
+                if self.get_piece_at(target) == '.':
+                    if rank == 1:  # Promotion
+                        for flag in [MoveFlag.PROMOTION_Q, MoveFlag.PROMOTION_R,
+                                MoveFlag.PROMOTION_B, MoveFlag.PROMOTION_N]:
+                            moves.append(Move(square, target, flag))
+                    else:
+                        moves.append(Move(square, target, MoveFlag.QUIET))
+
+                    # Double push from starting rank
+                    if rank == 6:
+                        target = Square.from_coords(rank - 2, file)
+                        if self.get_piece_at(target) == '.':
+                            moves.append(Move(square, target, MoveFlag.DOUBLE_PAWN_PUSH))
+
+            # Captures
+            for capture_file in [file - 1, file + 1]:
+                if 0 <= capture_file < 8 and rank > 0:
+                    target = Square.from_coords(rank - 1, capture_file)
+                    piece_at_target = self.get_piece_at(target)
+
+                    if piece_at_target != '.' and piece_at_target.isupper():  # Enemy piece
+                        if rank == 1:  # Promotion capture
+                            for flag in [MoveFlag.PROMOTION_CAPTURE_Q, MoveFlag.PROMOTION_CAPTURE_R,
+                                    MoveFlag.PROMOTION_CAPTURE_B, MoveFlag.PROMOTION_CAPTURE_N]:
+                                moves.append(Move(square, target, flag))
+                        else:
+                            moves.append(Move(square, target, MoveFlag.CAPTURE))
+
+                    # En passant
+                    if self.en_passant_target and target == self.en_passant_target:
+                        moves.append(Move(square, target, MoveFlag.EN_PASSANT))
+
+        return moves
+
+    def get_legal_knight_moves(self, square: Square) -> list[Move]:
+        """Get all legal knight moves from given square"""
+        moves = []
+        square_idx = int(square)
+        rank, file = square_idx // 8, square_idx % 8
+
+        # All possible knight moves
+        knight_moves = [
+            (2, 1), (2, -1), (-2, 1), (-2, -1),
+            (1, 2), (1, -2), (-1, 2), (-1, -2)
+        ]
+
+        for rank_offset, file_offset in knight_moves:
+            new_rank = rank + rank_offset
+            new_file = file + file_offset
+
+            if 0 <= new_rank < 8 and 0 <= new_file < 8:
+                target = Square.from_coords(new_rank, new_file)
+                target_piece = self.get_piece_at(target)
+
+                # Square is empty or contains enemy piece
+                if target_piece == '.' or \
+                (self.white_to_move and target_piece.islower()) or \
+                (not self.white_to_move and target_piece.isupper()):
+                    flag = MoveFlag.CAPTURE if target_piece != '.' else MoveFlag.QUIET
+                    moves.append(Move(square, target, flag))
+
+        return moves
+
+    def get_legal_sliding_moves(self, square: Square, directions: list) -> list[Move]:
+        """Get all legal moves for sliding pieces (bishop, rook, queen)"""
+        moves = []
+        square_idx = int(square)
+        rank, file = square_idx // 8, square_idx % 8
+
+        for direction in directions:
+            current_square = square_idx
+            current_rank, current_file = rank, file
+
+            while True:
+                current_square += direction
+                new_rank = current_square // 8
+                new_file = current_square % 8
+
+                # Check if we've moved off the board
+                if (current_square < 0 or current_square > 63):
+                    break
+
+                # Check if we've wrapped around the board
+                rank_diff = abs(new_rank - current_rank)
+                file_diff = abs(new_file - current_file)
+                if (direction in [self.EAST, self.WEST] and rank_diff != 0) or \
+                (direction in [self.NORTH, self.SOUTH] and file_diff != 0) or \
+                (direction in [self.NORTH_EAST, self.NORTH_WEST, self.SOUTH_EAST, self.SOUTH_WEST] 
+                    and abs(rank_diff - file_diff) != 0):
+                    break
+
+                target = Square.from_bitboard_square(current_square)
+                target_piece = self.get_piece_at(target)
+
+                # Empty square
+                if target_piece == '.':
+                    moves.append(Move(square, target, MoveFlag.QUIET))
+                # Enemy piece
+                elif (self.white_to_move and target_piece.islower()) or \
+                    (not self.white_to_move and target_piece.isupper()):
+                    moves.append(Move(square, target, MoveFlag.CAPTURE))
+                    break
+                # Own piece
+                else:
+                    break
+
+                current_rank = new_rank
+                current_file = new_file
+
+        return moves
+
+    def get_legal_king_moves(self, square: Square) -> list[Move]:
+        """Get all legal king moves from given square"""
+        moves = []
+        square_idx = int(square)
+        rank, file = square_idx // 8, square_idx % 8
+
+        # Normal king moves
+        king_moves = [
+            (1, 0), (1, 1), (0, 1), (-1, 1),
+            (-1, 0), (-1, -1), (0, -1), (1, -1)
+        ]
+
+        for rank_offset, file_offset in king_moves:
+            new_rank = rank + rank_offset
+            new_file = file + file_offset
+
+            if 0 <= new_rank < 8 and 0 <= new_file < 8:
+                target = Square.from_coords(new_rank, new_file)
+                target_piece = self.get_piece_at(target)
+
+                # Square is empty or contains enemy piece
+                if target_piece == '.' or \
+                (self.white_to_move and target_piece.islower()) or \
+                (not self.white_to_move and target_piece.isupper()):
+                    flag = MoveFlag.CAPTURE if target_piece != '.' else MoveFlag.QUIET
+                    moves.append(Move(square, target, flag))
+
+        # Castling
+        if self.white_to_move:
+            if self.castling_rights['K'] and square == Square.E1:
+                if (self.get_piece_at(Square.F1) == '.' and 
+                    self.get_piece_at(Square.G1) == '.' and
+                    not self.is_square_attacked(Square.E1, False) and
+                    not self.is_square_attacked(Square.F1, False) and
+                    not self.is_square_attacked(Square.G1, False)):
+                    moves.append(Move(Square.E1, Square.G1, MoveFlag.KING_CASTLE))
+
+            if self.castling_rights['Q'] and square == Square.E1:
+                if (self.get_piece_at(Square.D1) == '.' and 
+                    self.get_piece_at(Square.C1) == '.' and
+                    self.get_piece_at(Square.B1) == '.' and
+                    not self.is_square_attacked(Square.E1, False) and
+                    not self.is_square_attacked(Square.D1, False) and
+                    not self.is_square_attacked(Square.C1, False)):
+                    moves.append(Move(Square.E1, Square.C1, MoveFlag.QUEEN_CASTLE))
+        else:
+            if self.castling_rights['k'] and square == Square.E8:
+                if (self.get_piece_at(Square.F8) == '.' and 
+                    self.get_piece_at(Square.G8) == '.' and
+                    not self.is_square_attacked(Square.E8, True) and
+                    not self.is_square_attacked(Square.F8, True) and
+                    not self.is_square_attacked(Square.G8, True)):
+                    moves.append(Move(Square.E8, Square.G8, MoveFlag.KING_CASTLE))
+
+            if self.castling_rights['q'] and square == Square.E8:
+                if (self.get_piece_at(Square.D8) == '.' and 
+                    self.get_piece_at(Square.C8) == '.' and
+                    self.get_piece_at(Square.B8) == '.' and
+                    not self.is_square_attacked(Square.E8, True) and
+                    not self.is_square_attacked(Square.D8, True) and
+                    not self.is_square_attacked(Square.C8, True)):
+                    moves.append(Move(Square.E8, Square.C8, MoveFlag.QUEEN_CASTLE))
+
+        return moves
+
+    def get_legal_moves(self) -> list[Move]:
+        """Get all legal moves in the current position"""
+        moves = []
+
+        # Iterate through all squares
+        for square_idx in range(64):
+            square = Square.from_bitboard_square(square_idx)
+            piece = self.get_piece_at(square)
+
+            # Skip empty squares and opponent's pieces
+            if piece == '.' or \
+            (self.white_to_move and piece.islower()) or \
+            (not self.white_to_move and piece.isupper()):
+                continue
+
+            # Generate moves based on piece type
+            piece_type = piece.upper()
+            if piece_type == 'P':
+                moves.extend(self.get_legal_pawn_moves(square))
+            elif piece_type == 'N':
+                moves.extend(self.get_legal_knight_moves(square))
+            elif piece_type == 'B':
+                moves.extend(self.get_legal_sliding_moves(square, 
+                    [self.NORTH_EAST, self.NORTH_WEST, self.SOUTH_EAST, self.SOUTH_WEST]))
+            elif piece_type == 'R':
+                moves.extend(self.get_legal_sliding_moves(square,
+                    [self.NORTH, self.SOUTH, self.EAST, self.WEST]))
+            elif piece_type == 'Q':
+                moves.extend(self.get_legal_sliding_moves(square,
+                    [self.NORTH, self.SOUTH, self.EAST, self.WEST,
+                    self.NORTH_EAST, self.NORTH_WEST, self.SOUTH_EAST, self.SOUTH_WEST]))
+            elif piece_type == 'K':
+                moves.extend(self.get_legal_king_moves(square))
+
+        # Filter out moves that would leave king in check
+        legal_moves = []
+        for move in moves:
+            # Store board state
             old_state = self.__dict__.copy()
+
+            # Try to make the move
             if self.make_move(move):
-                self.__dict__ = old_state
-                return False
+                legal_moves.append(move)
+
+            # Restore board state
             self.__dict__ = old_state
 
-        return True
+        return legal_moves
