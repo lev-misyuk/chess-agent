@@ -2,3 +2,6 @@
 venv
 *.tar.gz
 test.py
+ideas.py
+*.cpp
+.vscode
